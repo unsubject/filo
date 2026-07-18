@@ -55,7 +55,6 @@ export class AnthropicClient implements AiClient {
     system: string,
     userText: string,
     maxTokens: number,
-    opts?: { disableThinking?: boolean },
   ): Promise<string> {
     const body: Record<string, unknown> = {
       model,
@@ -63,13 +62,9 @@ export class AnthropicClient implements AiClient {
       system,
       messages: [{ role: 'user', content: userText }],
     };
-    // On models with adaptive thinking on by default (Sonnet 5), thinking shares
-    // the `max_tokens` budget with output. For the seal we need the whole budget
-    // for formatted markdown, so disable thinking — otherwise long documents get
-    // truncated (stop_reason=max_tokens) and the guard below fails the seal.
-    if (opts?.disableThinking) {
-      body.thinking = { type: 'disabled' };
-    }
+    // Both correction and seal run on Haiku, which does no thinking by default,
+    // so the full `max_tokens` budget goes to output and no `thinking` param is
+    // needed.
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: {
@@ -154,11 +149,7 @@ export class AnthropicClient implements AiClient {
     const userText = `Title: ${meta.title}\n\nRaw lines:\n${rendered}`;
     // Generous budget to reduce truncation on long documents; the stop_reason
     // guard in `call` still rejects any response that is cut off regardless.
-    // Disable Sonnet 5's default adaptive thinking so the entire max_tokens
-    // budget goes to the formatted markdown (thinking+output share that budget).
-    return this.call(SEAL_MODEL, SEAL_SYSTEM, userText, 16384, {
-      disableThinking: true,
-    });
+    return this.call(SEAL_MODEL, SEAL_SYSTEM, userText, 16384);
   }
 }
 

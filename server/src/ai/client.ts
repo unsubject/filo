@@ -6,7 +6,7 @@
 /** Model + prompt-version constants (spec §3, §5.4, §4.6). */
 export const CORRECTION_MODEL = 'claude-haiku-4-5-20251001';
 export const CORRECTION_PROMPT_VERSION = 'correct-v1';
-export const SEAL_MODEL = 'claude-sonnet-5';
+export const SEAL_MODEL = 'claude-haiku-4-5-20251001';
 export const SEAL_PROMPT_VERSION = 'seal-v1';
 
 export interface CorrectionInput {

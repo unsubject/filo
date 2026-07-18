@@ -36,8 +36,12 @@ export function registerSealRoute(app: Hono<AppEnv>): void {
     let markdown: string;
     try {
       markdown = await ai.formatSeal(sealLines, { title: doc.title });
-    } catch {
-      // Draft is untouched on failure (no seal row written).
+    } catch (err) {
+      // Draft is untouched on failure (no seal row written). Log the reason
+      // (status/code only, never writing content — spec §6) so failures are
+      // diagnosable in Worker logs.
+      const reason = err instanceof Error ? err.message : 'seal_failed';
+      console.error('seal failed:', reason);
       return renderError(c, Errors.sealFailed());
     }
 

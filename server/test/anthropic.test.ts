@@ -80,8 +80,8 @@ describe('AnthropicClient truncation guard (stop_reason)', () => {
   });
 });
 
-describe('AnthropicClient seal disables adaptive thinking (Sonnet 5 budget)', () => {
-  it('formatSeal sends thinking:{type:"disabled"} and seals a normal end_turn', async () => {
+describe('AnthropicClient seal (Haiku, no thinking)', () => {
+  it('formatSeal targets Haiku, sends no thinking field, and seals a normal end_turn', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -100,12 +100,12 @@ describe('AnthropicClient seal disables adaptive thinking (Sonnet 5 budget)', ()
     );
     expect(md).toContain('full body');
 
-    // The seal request body must disable thinking so the whole max_tokens
-    // budget goes to the formatted markdown (thinking+output share the budget).
+    // Seal runs on Haiku (no thinking by default), so the whole max_tokens
+    // budget goes to the formatted markdown and no thinking param is sent.
     const [, init] = fetchSpy.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.thinking).toEqual({ type: 'disabled' });
-    expect(body.model).toBe('claude-sonnet-5');
+    expect(body.thinking).toBeUndefined();
+    expect(body.model).toBe('claude-haiku-4-5-20251001');
   });
 
   it('correctLines (Haiku) does NOT send a thinking field', async () => {

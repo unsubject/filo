@@ -21,7 +21,7 @@ describe('seal (spec §4.6, §5.5, §8)', () => {
       seal: { id: string; model: string; prompt_version: string };
       markdown: string;
     };
-    expect(s1.seal.model).toBe('claude-sonnet-5');
+    expect(s1.seal.model).toBe('claude-haiku-4-5-20251001');
     expect(s1.seal.prompt_version).toBe('seal-v1');
     expect(s1.markdown).toContain('first line');
 
