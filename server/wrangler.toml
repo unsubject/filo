@@ -23,3 +23,20 @@ FILO_ENV = "production"
 # Allowed CORS origin for the SPA. Use "*" for open access (safe here because
 # auth is a bearer token, not cookies), or pin to the SPA's deployed origin.
 CORS_ORIGIN = "*"
+
+# Observability — keep this in sync with the dashboard so git deploys don't
+# reset it. Logs are enabled (with invocation logs); traces stay off.
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+head_sampling_rate = 1
+persist = true
