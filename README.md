@@ -15,9 +15,10 @@ review history is in `PRODUCT_SPEC_REVIEW.md`).
 
 | Layer | Stack |
 |---|---|
-| Frontend (`web/`) | Vite + React + TypeScript SPA (Cloudflare Pages) |
+| Frontend (`web/`) | Vite + React + TypeScript SPA |
 | Backend (`server/`) | Cloudflare Worker + Hono, D1 (SQLite) |
-| AI | Claude API — **Haiku** for silent correction, **Sonnet** for seal-time formatting |
+| Hosting | A **single** Cloudflare Worker serves both the API and the SPA (static assets) on one origin — no CORS. Live at `filo.unsubject.com` |
+| AI | Claude **Haiku** (`claude-haiku-4-5`) for both silent correction and seal-time formatting |
 | Auth | Single-user bearer token (Cloudflare secret) |
 
 ```
@@ -99,11 +100,26 @@ few secrets only you can set:
    it's a local-dev convenience only. `VITE_API_BASE` is left **empty** in
    `web/.env.production` so the SPA calls the API same-origin.
 7. **Verify model IDs** are current on your account before production traffic:
-   correction `claude-haiku-4-5-20251001`, seal `claude-sonnet-5`.
+   correction and seal both use `claude-haiku-4-5-20251001`.
 
-## Status
+## Operating the live deployment
 
-MVP implemented across all three spec phases (capture core, silent correction,
-seal & format), with the acceptance-test matrix covered offline. Not yet done:
-live deployment (needs the account/secrets above) and final visual-design polish
-of the quiet status/fade treatment (§7/§10 open questions).
+filo runs as one git-connected Cloudflare Worker at **`filo.unsubject.com`**.
+
+- **Deploy:** push to `main` → Cloudflare Workers Builds rebuilds and deploys
+  automatically (root `server`, build `npm --prefix ../web ci && npm --prefix ../web run build`, deploy `npx wrangler deploy`).
+- **Secrets** (Worker → Settings → Variables and Secrets): `FILO_BEARER_TOKEN`
+  (your login, also entered in the app's token gate) and `ANTHROPIC_API_KEY`
+  (correction + seal). Optional `SECOND_BRAIN_URL` / `SECOND_BRAIN_TOKEN`.
+- **Logs:** observability is on (`wrangler.toml`) — Worker → Logs → live stream.
+  Seal/correction failures log a safe reason (`anthropic_http_401`, etc.) with no
+  writing content.
+- **Data:** documents/lines/seals live in the `filo` D1 database
+  (`231c6ee9-…`); schema is `server/migrations/0001_init.sql`.
+
+## Status — live ✅
+
+MVP shipped and deployed across all three spec phases (capture core, silent
+correction, seal & format). Optional follow-ups: wire the seal→2nd-brain push
+(an ingest endpoint on the 2nd-brain Worker), and final visual-design polish of
+the quiet status / fade treatment (§7/§10 open questions).
