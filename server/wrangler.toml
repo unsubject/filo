@@ -1,0 +1,22 @@
+name = "filo"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 binding. Fill in database_id after `wrangler d1 create filo`.
+[[d1_databases]]
+binding = "DB"
+database_name = "filo"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# Non-secret vars. Real secrets are set via `wrangler secret put`.
+[vars]
+# FILO_BEARER_TOKEN and ANTHROPIC_API_KEY are declared here for local dev only.
+# In production set them as secrets:
+#   wrangler secret put FILO_BEARER_TOKEN
+#   wrangler secret put ANTHROPIC_API_KEY
+# Optional 2nd-brain push target (leave unset to disable push):
+#   wrangler secret put SECOND_BRAIN_URL
+#   wrangler secret put SECOND_BRAIN_TOKEN
+FILO_ENV = "production"
