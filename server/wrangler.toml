@@ -20,9 +20,10 @@ migrations_dir = "migrations"
 #   wrangler secret put SECOND_BRAIN_URL
 #   wrangler secret put SECOND_BRAIN_TOKEN
 FILO_ENV = "production"
-# Allowed CORS origin for the SPA. Use "*" for open access (safe here because
-# auth is a bearer token, not cookies), or pin to the SPA's deployed origin.
-CORS_ORIGIN = "*"
+# Allowed CORS origin(s) for the SPA — the frontend is served from the custom
+# domain below. Accepts "*" or a comma-separated allowlist; add the *.pages.dev
+# preview origin here too if you want to exercise the API from preview builds.
+CORS_ORIGIN = "https://filo.unsubject.com"
 
 # Observability — keep this in sync with the dashboard so git deploys don't
 # reset it. Logs are enabled (with invocation logs); traces stay off.

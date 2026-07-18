@@ -78,6 +78,41 @@ describe('bearer auth (spec §6, §8)', () => {
     expect(allowHeaders).toContain('content-type');
   });
 
+  it('CORS allowlist reflects an allowed origin and rejects others', async () => {
+    const h = makeHarness();
+    const env = {
+      ...h.env,
+      CORS_ORIGIN: 'https://filo.unsubject.com,https://filo.pages.dev',
+    };
+    const preflight = (origin: string) =>
+      new Request('https://filo.test/documents', {
+        method: 'OPTIONS',
+        headers: {
+          origin,
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': 'authorization, content-type',
+        },
+      });
+
+    const allowed = await h.app.fetch(
+      preflight('https://filo.unsubject.com'),
+      env,
+    );
+    expect(allowed.headers.get('access-control-allow-origin')).toBe(
+      'https://filo.unsubject.com',
+    );
+
+    const preview = await h.app.fetch(preflight('https://filo.pages.dev'), env);
+    expect(preview.headers.get('access-control-allow-origin')).toBe(
+      'https://filo.pages.dev',
+    );
+
+    const denied = await h.app.fetch(preflight('https://evil.example'), env);
+    expect(denied.headers.get('access-control-allow-origin')).not.toBe(
+      'https://evil.example',
+    );
+  });
+
   it('timingSafeEqual compares correctly', () => {
     expect(timingSafeEqual('abc', 'abc')).toBe(true);
     expect(timingSafeEqual('abc', 'abd')).toBe(false);

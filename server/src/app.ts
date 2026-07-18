@@ -44,15 +44,21 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   // CORS runs before auth so the SPA (served from a different origin) can make
   // API calls. The preflight `OPTIONS` is answered here (204) and short-circuits
   // before `bearerAuth`, so preflight never requires the bearer token. The
-  // allowed origin is configurable via `CORS_ORIGIN` (default `*`, acceptable
-  // because auth is a bearer token, not cookies).
+  // allowed origin(s) are configurable via `CORS_ORIGIN`: `*` (default,
+  // acceptable because auth is a bearer token, not cookies), or a
+  // comma-separated allowlist (e.g. `https://filo.unsubject.com,https://filo.pages.dev`)
+  // — a request whose Origin matches an entry is reflected back, others rejected.
   app.use(
     '*',
     cors({
       origin: (origin, c) => {
-        const allowed = c.env.CORS_ORIGIN ?? '*';
-        if (allowed === '*') return '*';
-        return allowed === origin ? origin : null;
+        const raw = c.env.CORS_ORIGIN ?? '*';
+        if (raw === '*') return '*';
+        const allowed = raw
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+        return allowed.includes(origin) ? origin : null;
       },
       allowHeaders: ['Authorization', 'Content-Type'],
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
