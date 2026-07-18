@@ -4,6 +4,11 @@ import { setAuthToken } from "../api/client";
 export interface TokenGateProps {
   /** Called after a non-empty token is stored, so the app can re-render. */
   onSaved: () => void;
+  /**
+   * Optional brief notice shown above the field — e.g. when the app returns to
+   * the gate because a request 401'd on a wrong/expired token.
+   */
+  notice?: string;
 }
 
 /**
@@ -13,7 +18,7 @@ export interface TokenGateProps {
  * the static bundle (spec §6). Kept quiet and text-only, consistent with the
  * rest of the chrome.
  */
-export function TokenGate({ onSaved }: TokenGateProps) {
+export function TokenGate({ onSaved, notice }: TokenGateProps) {
   const [value, setValue] = useState("");
 
   function save() {
@@ -26,6 +31,11 @@ export function TokenGate({ onSaved }: TokenGateProps) {
 
   return (
     <div className="around-canvas token-gate" data-testid="token-gate">
+      {notice ? (
+        <p className="token-notice" role="alert" data-testid="token-notice">
+          {notice}
+        </p>
+      ) : null}
       <p>Enter your filo access token to begin.</p>
       <form
         onSubmit={(e) => {

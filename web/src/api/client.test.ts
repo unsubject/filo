@@ -272,6 +272,70 @@ describe("createApiClient wire contract (§5.3 envelopes)", () => {
     expect(headers.Authorization).toBe("Bearer late-login");
   });
 
+  it("invokes onUnauthorized on a 401 before throwing (no soft-lock)", async () => {
+    const onUnauthorized = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: "unauthorized", message: "bad token" } },
+          401,
+        ),
+      );
+    const api = createApiClient({
+      baseUrl: BASE,
+      getToken: () => "wrong-token",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      onUnauthorized,
+    });
+
+    await expect(api.listDocuments()).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("invokes onUnauthorized on a 401 from the export path too", async () => {
+    const onUnauthorized = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: "unauthorized", message: "bad token" } },
+          401,
+        ),
+      );
+    const api = createApiClient({
+      baseUrl: BASE,
+      getToken: () => "wrong-token",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      onUnauthorized,
+    });
+
+    await expect(api.exportMarkdown("d1")).rejects.toMatchObject({ status: 401 });
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT invoke onUnauthorized on non-401 errors", async () => {
+    const onUnauthorized = vi.fn();
+    const { api } = (() => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ error: { code: "not_found", message: "gone" } }, 404),
+        );
+      return {
+        api: createApiClient({
+          baseUrl: BASE,
+          getToken: () => "test-token",
+          fetchImpl: fetchMock as unknown as typeof fetch,
+          onUnauthorized,
+        }),
+      };
+    })();
+
+    await expect(api.getDocument("nope")).rejects.toMatchObject({ status: 404 });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
   it("surfaces the error envelope { error: { code, message } } as ApiError", async () => {
     const { api } = clientReturning(
       jsonResponse(

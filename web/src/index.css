@@ -193,6 +193,21 @@ body {
   color: var(--ink-soft);
 }
 
+.token-notice {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+/* Quiet sign-out / change-token control in the header chrome. */
+.sign-out {
+  margin-left: auto;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+.sign-out:hover {
+  opacity: 1;
+}
+
 /* ---- Writing canvas ---- */
 .writing-canvas {
   display: flex;

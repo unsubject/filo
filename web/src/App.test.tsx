@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
 import App from "./App";
 import { createFakeApi, type FakeApi } from "./test/fakeApi";
+import { setAuthToken, hasAuthToken } from "./api/client";
 
 afterEach(cleanup);
 
@@ -127,5 +128,65 @@ describe("filo keyboard contract & recovery", () => {
     );
     const stack = screen.getByTestId("line-stack");
     expect(within(stack).getByText("flaky line")).toBeInTheDocument();
+  });
+});
+
+describe("401 recovery — no soft-lock (§6)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  function json(body: unknown, status: number): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("a 401 from the API clears the token and returns to the gate", async () => {
+    // A stored (but wrong/expired) token makes the app leave the gate; the first
+    // real request then 401s.
+    setAuthToken("wrong-token");
+    expect(hasAuthToken()).toBe(true);
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        json({ error: { code: "unauthorized", message: "bad token" } }, 401),
+      );
+
+    // No `api` injected: App builds the real client, wiring its own
+    // onUnauthorized on top of the mocked fetch.
+    render(
+      <App
+        apiConfig={{
+          baseUrl: "http://api.test",
+          fetchImpl: fetchMock as unknown as typeof fetch,
+        }}
+        correctionDebounceMs={0}
+      />,
+    );
+
+    // The 401 bounces the user back to the token gate, with an explanatory
+    // notice, and the bad token is cleared from storage.
+    await screen.findByTestId("token-gate");
+    await screen.findByTestId("token-notice");
+    expect(hasAuthToken()).toBe(false);
+  });
+
+  it("the sign-out control clears the token and returns to the gate", async () => {
+    const api = createFakeApi();
+    setAuthToken("valid-token");
+    render(<App api={api} requireToken correctionDebounceMs={0} />);
+
+    // We're in the app (past the gate). Sign out.
+    const signOut = await screen.findByTestId("sign-out");
+    fireEvent.click(signOut);
+
+    await screen.findByTestId("token-gate");
+    expect(hasAuthToken()).toBe(false);
   });
 });

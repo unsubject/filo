@@ -79,3 +79,52 @@ describe('AnthropicClient truncation guard (stop_reason)', () => {
     expect(results[0].error).toBeUndefined();
   });
 });
+
+describe('AnthropicClient seal disables adaptive thinking (Sonnet 5 budget)', () => {
+  it('formatSeal sends thinking:{type:"disabled"} and seals a normal end_turn', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '# Title\n\nfull body' }],
+          stop_reason: 'end_turn',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const client = new AnthropicClient('test-key');
+    const md = await client.formatSeal(
+      [{ seq: 1, text: 'a line', is_blank: false }],
+      { title: 'Doc' },
+    );
+    expect(md).toContain('full body');
+
+    // The seal request body must disable thinking so the whole max_tokens
+    // budget goes to the formatted markdown (thinking+output share the budget).
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body.model).toBe('claude-sonnet-5');
+  });
+
+  it('correctLines (Haiku) does NOT send a thinking field', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '[{"id":"l1","corrected_text":"the cat"}]' }],
+          stop_reason: 'end_turn',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const client = new AnthropicClient('test-key');
+    await client.correctLines([{ id: 'l1', raw_text: 'teh cat' }]);
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.thinking).toBeUndefined();
+  });
+});

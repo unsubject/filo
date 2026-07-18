@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeHarness, type Harness } from './harness.js';
+import { makeHarness, TEST_TOKEN, type Harness } from './harness.js';
 
 async function newDoc(h: Harness): Promise<string> {
   const res = await h.request('POST', '/documents');
@@ -132,5 +132,29 @@ describe('export (spec §5.3, §8)', () => {
 
     const text = await res.text();
     expect(text).toContain('version two');
+  });
+
+  it('exposes Content-Disposition cross-origin so the SPA can read the filename', async () => {
+    const h = makeHarness();
+    const id = await newDoc(h);
+    await h.request('POST', `/documents/${id}/lines`, {
+      body: { raw_text: 'exportable', client_line_id: 'c-1' },
+    });
+    await h.request('POST', `/documents/${id}/seal`);
+
+    // A cross-origin GET (Origin header present) must carry
+    // Access-Control-Expose-Headers listing Content-Disposition, otherwise the
+    // browser hides it and the download falls back to filo-<id>.md.
+    const req = new Request(`https://filo.test/documents/${id}/export.md`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${TEST_TOKEN}`,
+        origin: 'https://filo.pages.dev',
+      },
+    });
+    const res = await h.app.fetch(req, h.env);
+    expect(res.status).toBe(200);
+    const exposed = res.headers.get('access-control-expose-headers') ?? '';
+    expect(exposed.toLowerCase()).toContain('content-disposition');
   });
 });

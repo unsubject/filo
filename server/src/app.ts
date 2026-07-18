@@ -62,6 +62,9 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
       },
       allowHeaders: ['Authorization', 'Content-Type'],
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      // Expose Content-Disposition so the SPA can read it cross-origin and
+      // recover the nice export filename (otherwise it falls back to filo-<id>.md).
+      exposeHeaders: ['Content-Disposition'],
     }),
   );
 

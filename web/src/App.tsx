@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createApiClient,
+  clearAuthToken,
   hasAuthToken,
+  type ApiClientConfig,
   type FiloApi,
 } from "./api/client";
 import { useFilo } from "./state/useFilo";
@@ -14,6 +16,12 @@ import type { CanvasNotice } from "./state/useFilo";
 export interface AppProps {
   /** Injectable API (tests pass a fake; production uses the real client). */
   api?: FiloApi;
+  /**
+   * Extra config for the internally-created real client (only used when `api`
+   * is not injected). Tests use this to supply a mocked `fetchImpl`; App always
+   * wires its own `onUnauthorized` on top so a 401 returns to the token gate.
+   */
+  apiConfig?: ApiClientConfig;
   /** Override the correction debounce (tests use 0). */
   correctionDebounceMs?: number;
   /**
@@ -25,20 +33,41 @@ export interface AppProps {
 
 export default function App({
   api,
+  apiConfig,
   correctionDebounceMs,
   requireToken = api === undefined,
 }: AppProps) {
-  const client = useMemo(() => api ?? createApiClient(), [api]);
-  const store = useFilo(client, { correctionDebounceMs });
-
   // Runtime-only auth: gate the app until a token is stored in localStorage.
   const [authed, setAuthed] = useState(() => !requireToken || hasAuthToken());
+  // Set when we bounced the user back to the gate because a request 401'd, so
+  // the gate can explain why (vs. a first-time or deliberate sign-out).
+  const [rejectedToken, setRejectedToken] = useState(false);
+
+  // Any 401 clears the stored token and returns to the gate — never a soft-lock
+  // where a wrong token bricks the app until localStorage is cleared by hand.
+  const handleUnauthorized = useCallback(() => {
+    clearAuthToken();
+    setRejectedToken(true);
+    setAuthed(false);
+  }, []);
+
+  const client = useMemo(
+    () => api ?? createApiClient({ ...apiConfig, onUnauthorized: handleUnauthorized }),
+    [api, apiConfig, handleUnauthorized],
+  );
+  const store = useFilo(client, { correctionDebounceMs });
 
   const { refreshDocuments } = store;
   useEffect(() => {
     if (!authed) return;
     void refreshDocuments();
   }, [refreshDocuments, authed]);
+
+  function signOut() {
+    clearAuthToken();
+    setRejectedToken(false);
+    setAuthed(false);
+  }
 
   function handleRetry(notice: CanvasNotice) {
     switch (notice.kind) {
@@ -68,7 +97,17 @@ export default function App({
     return (
       <div className="app">
         <main className="app-main">
-          <TokenGate onSaved={() => setAuthed(true)} />
+          <TokenGate
+            notice={
+              rejectedToken
+                ? "That token didn't work — please re-enter."
+                : undefined
+            }
+            onSaved={() => {
+              setRejectedToken(false);
+              setAuthed(true);
+            }}
+          />
         </main>
       </div>
     );
@@ -114,6 +153,16 @@ export default function App({
           notice={store.notice}
           onRetry={handleRetry}
         />
+
+        <button
+          type="button"
+          className="sign-out"
+          data-testid="sign-out"
+          title="Change or clear your access token"
+          onClick={signOut}
+        >
+          Sign out
+        </button>
       </header>
 
       <main className="app-main">

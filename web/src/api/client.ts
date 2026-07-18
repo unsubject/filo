@@ -71,6 +71,12 @@ export interface ApiClientConfig {
   getToken?: () => string | null;
   /** Injectable for tests / SSR. Defaults to global `fetch`. */
   fetchImpl?: typeof fetch;
+  /**
+   * Called whenever any request gets a `401`, immediately before the `ApiError`
+   * is thrown. The app uses this to clear the stored token and return to the
+   * token gate so a wrong/expired token can be re-entered (never a soft-lock).
+   */
+  onUnauthorized?: () => void;
 }
 
 function readStoredToken(): string | null {
@@ -154,6 +160,7 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
   ).replace(/\/+$/, "");
   const getToken = config.getToken ?? getAuthToken;
   const doFetch = config.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const onUnauthorized = config.onUnauthorized;
 
   function authHeaders(extra?: Record<string, string>): HeadersInit {
     const token = getToken();
@@ -178,7 +185,10 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await doFetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw await toApiError(res);
+    if (!res.ok) {
+      if (res.status === 401) onUnauthorized?.();
+      throw await toApiError(res);
+    }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
@@ -281,7 +291,10 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
 
     async exportMarkdown(id) {
       const res = await doFetch(this.exportUrl(id), { headers: authHeaders() });
-      if (!res.ok) throw await toApiError(res);
+      if (!res.ok) {
+        if (res.status === 401) onUnauthorized?.();
+        throw await toApiError(res);
+      }
       const markdown = await res.text();
       const filename =
         contentDispositionFilename(res.headers.get("Content-Disposition")) ??
