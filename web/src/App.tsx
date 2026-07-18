@@ -34,7 +34,10 @@ export default function App({ api, correctionDebounceMs }: AppProps) {
         if (store.activeId) void store.openDocument(store.activeId);
         break;
       case "correction_failed":
+        // Actually retry the correction pass; clear the notice first so a fresh
+        // failure can re-raise it.
         store.dismissNotice();
+        void store.runCorrection();
         break;
       case "export_unavailable":
         break;

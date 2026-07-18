@@ -85,7 +85,7 @@ export function DocumentSwitcher({
                   >
                     <span className="doc-title">{doc.title}</span>
                     <span className="doc-meta">
-                      {doc.status === "sealed" ? "sealed" : "draft"}
+                      {doc.sealed_at != null ? "sealed" : "draft"}
                     </span>
                   </button>
                   <button

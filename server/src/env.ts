@@ -15,4 +15,6 @@ export interface Env {
   SECOND_BRAIN_TOKEN?: string;
   /** Free-form environment label (non-secret). */
   FILO_ENV?: string;
+  /** Allowed CORS origin for the SPA. Defaults to `*` when unset. */
+  CORS_ORIGIN?: string;
 }

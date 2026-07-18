@@ -88,34 +88,38 @@ describe('line commit (spec §5.3, §8)', () => {
 });
 
 describe('undo-last (spec §4.3, §4.7, §8)', () => {
-  it('soft-deletes the most recent non-deleted line', async () => {
+  it('soft-deletes the most recent non-deleted line and returns its id', async () => {
     const h = makeHarness();
     const id = await newDoc(h);
     await h.request('POST', `/documents/${id}/lines`, {
       body: { raw_text: 'first', client_line_id: 'c-1' },
     });
-    await h.request('POST', `/documents/${id}/lines`, {
+    const secondRes = await h.request('POST', `/documents/${id}/lines`, {
       body: { raw_text: 'second', client_line_id: 'c-2' },
     });
+    const secondId = ((await secondRes.json()) as { line: LineDto }).line.id;
 
     const undo = await h.request('DELETE', `/documents/${id}/lines/last`);
     expect(undo.status).toBe(200);
-    const { deleted_line } = (await undo.json()) as { deleted_line: LineDto };
-    expect(deleted_line.raw_text).toBe('second');
-    expect(deleted_line.deleted_at).not.toBeNull();
+    const { deleted_line_id } = (await undo.json()) as {
+      deleted_line_id: string | null;
+    };
+    expect(deleted_line_id).toBe(secondId);
 
     const doc = await h.request('GET', `/documents/${id}`);
     const { lines } = (await doc.json()) as { lines: LineDto[] };
     expect(lines.map((l) => l.raw_text)).toEqual(['first']);
   });
 
-  it('returns 409 nothing_to_undo when there is nothing to remove', async () => {
+  it('returns 200 with deleted_line_id null when there is nothing to remove', async () => {
     const h = makeHarness();
     const id = await newDoc(h);
     const undo = await h.request('DELETE', `/documents/${id}/lines/last`);
-    expect(undo.status).toBe(409);
-    const body = (await undo.json()) as { error: { code: string } };
-    expect(body.error.code).toBe('nothing_to_undo');
+    expect(undo.status).toBe(200);
+    const { deleted_line_id } = (await undo.json()) as {
+      deleted_line_id: string | null;
+    };
+    expect(deleted_line_id).toBeNull();
   });
 
   it('cannot cross a sealed boundary', async () => {
@@ -126,18 +130,25 @@ describe('undo-last (spec §4.3, §4.7, §8)', () => {
     });
     await h.request('POST', `/documents/${id}/seal`);
 
-    // Nothing added since the seal → undo is a no-op.
+    // Nothing added since the seal → undo is a no-op (200, null id).
     const undo1 = await h.request('DELETE', `/documents/${id}/lines/last`);
-    expect(undo1.status).toBe(409);
+    expect(undo1.status).toBe(200);
+    const undo1Body = (await undo1.json()) as {
+      deleted_line_id: string | null;
+    };
+    expect(undo1Body.deleted_line_id).toBeNull();
 
     // Add a line after the seal → undo removes only that line.
-    await h.request('POST', `/documents/${id}/lines`, {
+    const afterRes = await h.request('POST', `/documents/${id}/lines`, {
       body: { raw_text: 'after seal', client_line_id: 'c-2' },
     });
+    const afterId = ((await afterRes.json()) as { line: LineDto }).line.id;
     const undo2 = await h.request('DELETE', `/documents/${id}/lines/last`);
     expect(undo2.status).toBe(200);
-    const { deleted_line } = (await undo2.json()) as { deleted_line: LineDto };
-    expect(deleted_line.raw_text).toBe('after seal');
+    const { deleted_line_id } = (await undo2.json()) as {
+      deleted_line_id: string | null;
+    };
+    expect(deleted_line_id).toBe(afterId);
 
     // The pre-seal line survives.
     const doc = await h.request('GET', `/documents/${id}`);

@@ -255,10 +255,13 @@ export async function restoreRawLatest(
   if (!latest || latest.id !== lineId) {
     return { ok: false };
   }
-  // Blank lines stay 'skipped'; everything else returns to 'pending'
-  // (its raw text renders, and it is eligible for a future correction pass).
+  // Blank lines stay 'skipped'; everything else lands in the terminal status
+  // 'unchanged'. Restore-raw is the spec's only escape hatch for a bad
+  // correction (§4.3, §4.7): the line must NOT be re-touched by a later
+  // correction pass (debounce or reconcile-on-open), so it cannot return to
+  // 'pending'. Its raw text renders because corrected_text is cleared.
   const resetStatus: CorrectionStatus =
-    latest.raw_text === '' ? 'skipped' : 'pending';
+    latest.raw_text === '' ? 'skipped' : 'unchanged';
   await db.run(
     `UPDATE lines
         SET corrected_text = NULL,

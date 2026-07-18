@@ -16,7 +16,7 @@ import type {
   DocumentMeta,
   DocumentWithLines,
   Line,
-  Seal,
+  SealResult,
   SealOptions,
   UndoResult,
   ApiErrorEnvelope,
@@ -52,7 +52,7 @@ export interface FiloApi {
   undoLastLine(id: string): Promise<UndoResult>;
   restoreRaw(id: string, lineId: string): Promise<Line>;
   correct(id: string): Promise<CorrectResult>;
-  seal(id: string, options?: SealOptions): Promise<Seal>;
+  seal(id: string, options?: SealOptions): Promise<SealResult>;
   /** Fetch the latest sealed markdown as text; throws ApiError `no_seal` (409). */
   exportMarkdown(id: string): Promise<{ filename: string; markdown: string }>;
   /** Absolute URL of the export endpoint (for anchor downloads). */
@@ -137,18 +137,24 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
   }
 
   return {
-    listDocuments() {
-      return request<DocumentMeta[]>("/documents", {
-        headers: authHeaders(),
-      });
+    async listDocuments() {
+      const { documents } = await request<{ documents: DocumentMeta[] }>(
+        "/documents",
+        { headers: authHeaders() },
+      );
+      return documents;
     },
 
-    createDocument() {
-      return request<DocumentMeta>("/documents", {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: "{}",
-      });
+    async createDocument() {
+      const { document } = await request<{ document: DocumentMeta }>(
+        "/documents",
+        {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: "{}",
+        },
+      );
+      return document;
     },
 
     getDocument(id) {
@@ -157,12 +163,16 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
       });
     },
 
-    renameDocument(id, title) {
-      return request<DocumentMeta>(`/documents/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ title }),
-      });
+    async renameDocument(id, title) {
+      const { document } = await request<{ document: DocumentMeta }>(
+        `/documents/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ title }),
+        },
+      );
+      return document;
     },
 
     async deleteDocument(id) {
@@ -172,12 +182,16 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
       });
     },
 
-    commitLine(id, input) {
-      return request<Line>(`/documents/${encodeURIComponent(id)}/lines`, {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(input),
-      });
+    async commitLine(id, input) {
+      const { line } = await request<{ line: Line }>(
+        `/documents/${encodeURIComponent(id)}/lines`,
+        {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(input),
+        },
+      );
+      return line;
     },
 
     undoLastLine(id) {
@@ -187,13 +201,14 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
       );
     },
 
-    restoreRaw(id, lineId) {
-      return request<Line>(
+    async restoreRaw(id, lineId) {
+      const { line } = await request<{ line: Line }>(
         `/documents/${encodeURIComponent(id)}/lines/${encodeURIComponent(
           lineId,
         )}/restore-raw`,
         { method: "POST", headers: authHeaders() },
       );
+      return line;
     },
 
     correct(id) {
@@ -204,7 +219,7 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
     },
 
     seal(id, options) {
-      return request<Seal>(`/documents/${encodeURIComponent(id)}/seal`, {
+      return request<SealResult>(`/documents/${encodeURIComponent(id)}/seal`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({

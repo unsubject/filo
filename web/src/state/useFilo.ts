@@ -479,6 +479,7 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
     commitNormal,
     commitBlank,
     retryFailedCommits,
+    runCorrection,
     // recovery
     canUndo,
     undoLast,

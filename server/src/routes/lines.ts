@@ -66,9 +66,11 @@ export function registerLineRoutes(app: Hono<AppEnv>): void {
     if (!doc) return renderError(c, Errors.notFound());
 
     const deleted = await softDeleteLastLine(db, documentId, now);
-    if (!deleted) return renderError(c, Errors.nothingToUndo());
+    // Nothing to undo is a normal, non-error outcome (spec §4.7): return 200
+    // with a null id rather than a 409, matching the client's UndoResult.
+    if (!deleted) return c.json({ deleted_line_id: null });
     await touchDocument(db, documentId, now);
-    return c.json({ deleted_line: deleted });
+    return c.json({ deleted_line_id: deleted.id });
   });
 
   // Restore-raw: latest line only; clears the correction so raw renders.

@@ -144,7 +144,21 @@ describe('restore-raw (spec §4.3, §8)', () => {
     const restored = ((await restore.json()) as { line: LineDto }).line;
     expect(restored.corrected_text).toBeNull();
     expect(restored.raw_text).toBe('teh cat');
-    expect(restored.correction_status).toBe('pending');
+    // Restore-raw lands in a TERMINAL status (§4.3): the rejected fix must not
+    // be re-applied by a later correction pass.
+    expect(restored.correction_status).toBe('unchanged');
+
+    // A subsequent /correct must NOT re-touch the restored line.
+    const recorrect = await h.request('POST', `/documents/${id}/correct`);
+    const summary = (await recorrect.json()) as {
+      applied: number;
+      lines: LineDto[];
+    };
+    expect(summary.applied).toBe(0);
+    const line = summary.lines.find((l) => l.id === lineId)!;
+    expect(line.raw_text).toBe('teh cat');
+    expect(line.corrected_text).toBeNull();
+    expect(line.correction_status).toBe('unchanged');
   });
 
   it('rejects restore-raw on a non-latest line with 409', async () => {

@@ -51,6 +51,33 @@ describe('bearer auth (spec §6, §8)', () => {
     expect(body.error.code).toBe('unauthorized');
   });
 
+  it('CORS preflight (OPTIONS) succeeds without a bearer token and carries Access-Control-* headers', async () => {
+    const h = makeHarness();
+    // A preflight from the SPA: no Authorization header at all.
+    const req = new Request('https://filo.test/documents', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://localhost:5173',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization, content-type',
+      },
+    });
+    const res = await h.app.fetch(req, h.env);
+
+    // 2xx (204) — preflight is answered before auth, so no 401.
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThan(300);
+
+    expect(res.headers.get('access-control-allow-origin')).toBeTruthy();
+    const methods = res.headers.get('access-control-allow-methods') ?? '';
+    expect(methods).toContain('POST');
+    const allowHeaders = (
+      res.headers.get('access-control-allow-headers') ?? ''
+    ).toLowerCase();
+    expect(allowHeaders).toContain('authorization');
+    expect(allowHeaders).toContain('content-type');
+  });
+
   it('timingSafeEqual compares correctly', () => {
     expect(timingSafeEqual('abc', 'abc')).toBe(true);
     expect(timingSafeEqual('abc', 'abd')).toBe(false);

@@ -186,7 +186,7 @@ export function createFakeApi(): FakeApi {
       const md = lines
         .map((l) => l.corrected_text ?? l.raw_text)
         .join("\n\n");
-      const seal: Seal = {
+      const sealRow: Seal = {
         id: nextId("seal"),
         document_id: id,
         formatted_markdown: md,
@@ -194,15 +194,26 @@ export function createFakeApi(): FakeApi {
         created_at: now(),
       };
       const seals = state.seals.get(id) ?? [];
-      seals.push(seal);
+      seals.push(sealRow);
       state.seals.set(id, seals);
+      // Mirror the server (§4.6): sealing records `sealed_at` but keeps the
+      // document a draft so writing may continue. `status='sealed'` is only
+      // reachable via explicit PATCH (a future freeze feature).
       state.documents.set(id, {
         ...doc,
-        status: "sealed",
-        sealed_at: seal.created_at,
+        sealed_at: sealRow.created_at,
         updated_at: now(),
       });
-      return seal;
+      return {
+        seal: {
+          id: sealRow.id,
+          document_id: sealRow.document_id,
+          model: sealRow.model,
+          created_at: sealRow.created_at,
+        },
+        markdown: md,
+        pushed: false,
+      };
     },
 
     exportUrl(id) {

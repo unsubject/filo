@@ -61,6 +61,24 @@ export interface CorrectResult {
   lines: Line[];
 }
 
+/**
+ * Result of POST /documents/:id/seal. The server returns the new seal's
+ * metadata (no `formatted_markdown` — that arrives as `markdown`), the formatted
+ * markdown, and whether the optional 2nd-brain push happened.
+ */
+export interface SealResult {
+  seal: {
+    id: string;
+    document_id: string;
+    model: string;
+    prompt_version?: string | null;
+    created_at: number;
+  };
+  markdown: string;
+  pushed: boolean;
+  push_reason?: string;
+}
+
 /** Result of DELETE /documents/:id/lines/last. */
 export interface UndoResult {
   /** The line that was soft-deleted, or null if there was nothing to undo. */
