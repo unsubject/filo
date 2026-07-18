@@ -1,0 +1,12 @@
+# Copy to `server/.dev.vars` for local `wrangler dev`. Never commit real values.
+# (.dev.vars is gitignored.)
+
+# Single-user bearer token the SPA must send as `Authorization: Bearer <token>`.
+FILO_BEARER_TOKEN=dev-local-token
+
+# Claude API key (used for silent correction + seal formatting).
+ANTHROPIC_API_KEY=
+
+# Optional: enable sealed-document push to your 2nd-brain (leave unset to disable).
+SECOND_BRAIN_URL=
+SECOND_BRAIN_TOKEN=
