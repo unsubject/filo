@@ -1,0 +1,87 @@
+import { describe, it, expect } from 'vitest';
+import { makeHarness } from './harness.js';
+import { timingSafeEqual } from '../src/auth.js';
+
+describe('bearer auth (spec §6, §8)', () => {
+  it('every route rejects unauthorized requests with a uniform 401 envelope', async () => {
+    const h = makeHarness();
+    // Seed a doc + line + seal with a valid token so protected resources exist.
+    const created = await h.request('POST', '/documents');
+    const { document } = (await created.json()) as { document: { id: string } };
+    const id = document.id;
+
+    const routes: Array<[string, string, unknown?]> = [
+      ['GET', '/documents'],
+      ['POST', '/documents'],
+      ['GET', `/documents/${id}`],
+      ['PATCH', `/documents/${id}`, { title: 'x' }],
+      ['DELETE', `/documents/${id}`],
+      ['POST', `/documents/${id}/lines`, { raw_text: 'a', client_line_id: 'c1' }],
+      ['DELETE', `/documents/${id}/lines/last`],
+      ['POST', `/documents/${id}/lines/line_x/restore-raw`],
+      ['POST', `/documents/${id}/correct`],
+      ['POST', `/documents/${id}/seal`],
+      ['GET', `/documents/${id}/export.md`],
+    ];
+
+    for (const [method, path, body] of routes) {
+      // No token at all.
+      const noTok = await h.request(method, path, { body, token: null });
+      expect(noTok.status, `${method} ${path} (no token)`).toBe(401);
+      const noTokBody = (await noTok.json()) as {
+        error: { code: string; message: string };
+      };
+      expect(noTokBody.error.code).toBe('unauthorized');
+
+      // Wrong token.
+      const badTok = await h.request(method, path, { body, token: 'wrong' });
+      expect(badTok.status, `${method} ${path} (bad token)`).toBe(401);
+      const badBody = (await badTok.json()) as { error: { code: string } };
+      expect(badBody.error.code).toBe('unauthorized');
+    }
+  });
+
+  it('401 does not reveal whether the resource exists', async () => {
+    const h = makeHarness();
+    const missing = await h.request('GET', '/documents/does-not-exist', {
+      token: null,
+    });
+    expect(missing.status).toBe(401);
+    const body = (await missing.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('unauthorized');
+  });
+
+  it('CORS preflight (OPTIONS) succeeds without a bearer token and carries Access-Control-* headers', async () => {
+    const h = makeHarness();
+    // A preflight from the SPA: no Authorization header at all.
+    const req = new Request('https://filo.test/documents', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://localhost:5173',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization, content-type',
+      },
+    });
+    const res = await h.app.fetch(req, h.env);
+
+    // 2xx (204) — preflight is answered before auth, so no 401.
+    expect(res.status).toBeGreaterThanOrEqual(200);
+    expect(res.status).toBeLessThan(300);
+
+    expect(res.headers.get('access-control-allow-origin')).toBeTruthy();
+    const methods = res.headers.get('access-control-allow-methods') ?? '';
+    expect(methods).toContain('POST');
+    const allowHeaders = (
+      res.headers.get('access-control-allow-headers') ?? ''
+    ).toLowerCase();
+    expect(allowHeaders).toContain('authorization');
+    expect(allowHeaders).toContain('content-type');
+  });
+
+  it('timingSafeEqual compares correctly', () => {
+    expect(timingSafeEqual('abc', 'abc')).toBe(true);
+    expect(timingSafeEqual('abc', 'abd')).toBe(false);
+    expect(timingSafeEqual('abc', 'abcd')).toBe(false);
+    expect(timingSafeEqual('', '')).toBe(true);
+  });
+});

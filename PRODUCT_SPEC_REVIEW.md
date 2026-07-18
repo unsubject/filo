@@ -244,7 +244,23 @@ CREATE TABLE lines (
 
 CREATE INDEX lines_document_seq_idx ON lines(document_id, seq);
 CREATE INDEX lines_pending_correction_idx ON lines(document_id, correction_status, deleted_at);
+
+CREATE TABLE seals (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  formatted_markdown TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt_version TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX seals_document_created_idx ON seals(document_id, created_at);
 ```
+
+Seal history is the persistence target for `POST /documents/:id/seal` and
+`GET /documents/:id/export.md`: the newest `seals` row for a document is the
+current export, re-seal appends a new row, and the `ON DELETE CASCADE` removes a
+document's seals with it.
 
 ### 7. Define export semantics
 
