@@ -7,7 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "filo"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "231c6ee9-fe86-492c-915f-1dbcef7d239e"
 migrations_dir = "migrations"
 
 # Non-secret vars. Real secrets are set via `wrangler secret put`.
