@@ -2,10 +2,11 @@
 
 > A distraction-free, typewriter-style capture tool for writing line by line.
 
-*Revision 2 — hardened after the spec review (`PRODUCT_SPEC_REVIEW.md`, PR #1).
-The core vision is unchanged; this revision adds lifecycle, sync, mobile/IME,
-security/privacy, and acceptance-test detail so the build can proceed with
-testable guards.*
+*Revision 3 — refined after the round-2 review (`PRODUCT_SPEC_REVIEW.md`, PR #2;
+round-1 review preserved in PR #1). The core vision is unchanged; this revision
+adds the full keyboard/IME contract, blank-line policy, document titling &
+switcher behavior, export HTTP semantics, an API error envelope, expanded quiet
+states, testable capture rules, and a design/visual section.*
 
 ## 1. Vision
 
@@ -45,6 +46,18 @@ mixed freely within the same document.
 5. **Bilingual is first-class,** not an afterthought. Chinese input (IME) must
    feel exactly as smooth as English.
 
+**"Capture, not editor" as concrete, testable rules.** The principle above is
+enforced by these prohibitions, which hold as features accumulate:
+
+- No cursor placement inside committed lines.
+- No per-line edit buttons, diffs, or correction badges in the line stack.
+- No inline AI suggestions or autocomplete.
+- No rich-text formatting toolbar.
+- Undo-last and latest-line restore-raw are the **only** destructive actions on
+  the writing canvas.
+- Rename, delete-document, seal, and export live **outside** the writing rhythm
+  (in the document menu/switcher, never adjacent to the text cursor).
+
 ## 3. Locked design decisions
 
 | Area | Decision |
@@ -82,10 +95,25 @@ A full-screen, distraction-free surface:
 
 **Quiet status surface.** Cloud sync and background AI introduce invisible
 failure modes, so there is exactly **one** unobtrusive status affordance (a
-small bottom-corner glyph or a row in the document menu) with states:
-`Saved · Syncing · Offline · Correction pending · Seal failed`. The rule:
-status is there **if you look for it**, but it never competes with the composer
-and never interrupts.
+small bottom-corner glyph or a row in the document menu). The rule: status is
+there **if you look for it**, but it never competes with the composer and never
+interrupts. All of the following are quiet and text-only — never a modal, toast,
+or badge in the line stack:
+
+`Saved · Syncing · Offline · Correction pending · Correction failed ·
+Seal failed`.
+
+**States around the canvas** must also be specified so the build never
+improvises noisy UI — each is quiet, text-only copy:
+
+- No documents yet (empty document list).
+- Empty document (before the first line — see the first-run line in §4.4).
+- Loading a document.
+- Failed to load a document (with a quiet retry).
+- Line commit failed (composer text retained — see §5.6).
+- Correction failed (retryable).
+- Seal failed (draft untouched, retryable).
+- Export unavailable because the document has never been sealed.
 
 ### 4.2 IME safety (make-or-break for Traditional Chinese)
 
@@ -100,6 +128,19 @@ and press keys — including **Enter** — to *select candidate characters*. `fi
 
 This is the single most important interaction detail in the product. If it is
 wrong, the tool is unusable for half its purpose.
+
+**Complete keyboard contract.** Enter is the primary action and is overloaded
+across desktop, mobile, and IMEs, so every case is defined explicitly (the goal
+is to *prevent surprising commits*, not to add features):
+
+| Input | Behavior |
+|---|---|
+| `Enter` while **not** composing | Commit the current **non-empty** line. |
+| `Enter` while composing | Let the IME select candidates; **do not commit**. |
+| Empty composer + `Enter` | **No-op** — never create an accidental blank line. |
+| `Shift+Enter` | Commit an **intentional blank line** (pacing). |
+| `Cmd/Ctrl+Enter` | Alternate explicit commit — useful for mobile / accessibility. |
+| Mobile keyboard send/return | Same as `Enter` (commit); still gated by composition state. |
 
 **Mobile / soft-keyboard contract.** The web app will be opened on phones, and
 the whole interaction hinges on Enter — which mobile keyboards handle
@@ -135,6 +176,15 @@ Writing is organized into **discrete, named documents**. A minimal document list
 lets you create a new document or open an existing one. The writing canvas stays
 uncluttered; document management lives behind a light, out-of-the-way menu.
 
+**Titling never blocks capture.** A new document is **auto-titled by timestamp**
+and opens the canvas immediately — you never name a document before writing.
+Rename happens quietly later, from the document list.
+
+**Document switcher primitives.** The switcher (out of the writing path) offers:
+create · rename · delete · open draft · view latest sealed export · see sync
+state. Sort order is defined to avoid ambiguity: **drafts first by `updated_at`
+descending, then sealed-only documents**.
+
 **First-run empty state.** Because the interaction model is unfamiliar, a new
 document shows one dismissible line before the first commit — *"Write one line,
 press Enter, keep going."* — then disappears.
@@ -150,6 +200,10 @@ press Enter, keep going."* — then disappears.
 - Correction is **best-effort while the app is open**: triggered on a debounce
   and reconciled when a document is next opened (see §5.4). If a correction is
   wrong on the latest line, use restore-raw (§4.3).
+- **Blank lines** (committed via `Shift+Enter`) are stored as a line with empty
+  `raw_text` and `correction_status = 'skipped'`; the correction pass never
+  touches them, undo-last treats them like any line, and seal reads them as
+  paragraph breaks (§4.6).
 
 ### 4.6 Seal & format
 
@@ -162,8 +216,11 @@ does heavier AI work.
   - *Allowed:* headings, paragraphs, bullet lists, and blockquotes where clearly
     implied by the raw lines.
   - *Not allowed:* adding new claims, reordering (unless explicitly asked),
-    summarizing, translating, or changing register/voice.
+    summarizing, translating, changing register/voice, or inventing headings the
+    content doesn't support.
   - Ambiguous fragments stay fragments — do not over-polish.
+  - Intentional blank lines are honored as paragraph breaks. Return markdown
+    only — no commentary.
 - **Lifecycle:** sealing creates a **version** (a row in `seals`); the draft may
   keep going afterward. **Re-sealing is allowed** and appends to seal history.
   Export uses the **latest** seal by default. If a seal fails, the draft is
@@ -215,14 +272,16 @@ documents(
 
 lines(
   id                       TEXT PRIMARY KEY,
-  document_id              TEXT NOT NULL REFERENCES documents(id),
-  client_line_id           TEXT,           -- client-generated, for idempotency
+  document_id              TEXT NOT NULL
+                             REFERENCES documents(id) ON DELETE CASCADE,
+  client_line_id           TEXT NOT NULL,  -- client-generated, for idempotency
   seq                      INTEGER NOT NULL,-- server-assigned, monotonic per doc
   raw_text                 TEXT NOT NULL,  -- exactly as typed; never overwritten
+                                           -- (empty string for a blank line)
   corrected_text           TEXT,           -- silent fix; null until corrected
   correction_status        TEXT NOT NULL DEFAULT 'pending'
                              CHECK (correction_status IN
-                               ('pending','corrected','failed','skipped')),
+                               ('pending','corrected','unchanged','failed','skipped')),
   correction_model         TEXT,
   correction_prompt_version TEXT,
   correction_error         TEXT,
@@ -235,7 +294,8 @@ lines(
 
 seals(
   id                TEXT PRIMARY KEY,
-  document_id       TEXT NOT NULL REFERENCES documents(id),
+  document_id       TEXT NOT NULL
+                      REFERENCES documents(id) ON DELETE CASCADE,
   formatted_markdown TEXT NOT NULL,
   model             TEXT NOT NULL,
   prompt_version    TEXT,
@@ -244,7 +304,7 @@ seals(
 
 -- Indexes
 CREATE INDEX idx_lines_doc_seq       ON lines(document_id, seq);
-CREATE INDEX idx_lines_doc_pending   ON lines(document_id, correction_status);
+CREATE INDEX idx_lines_doc_pending   ON lines(document_id, correction_status, deleted_at);
 CREATE INDEX idx_seals_doc_created   ON seals(document_id, created_at);
 ```
 
@@ -270,12 +330,28 @@ All routes require the bearer token.
 | `POST /documents/:id/lines/:lineId/restore-raw` | Restore the latest line to `raw_text` (clears the correction) |
 | `POST /documents/:id/correct` | Correct all still-pending, non-deleted lines (Haiku), silent in-place update |
 | `POST /documents/:id/seal` | Format via Sonnet, append a `seals` row, return markdown; optional 2nd-brain push |
-| `GET /documents/:id/export.md` | Download the latest sealed markdown |
+| `GET /documents/:id/export.md` | Download the latest sealed markdown (never seals implicitly) |
 
 **Idempotency & ordering.** `POST /lines` carries a client-generated
 `client_line_id`; the server assigns `seq` in a D1 transaction and enforces
 `UNIQUE (document_id, seq)` and `UNIQUE (document_id, client_line_id)`. A retried
 submit returns the existing line rather than creating a duplicate.
+
+**Export semantics.** `GET /export.md` returns the **latest** seal and never
+seals implicitly. If the document has never been sealed it returns **`409`**
+with error code `no_seal`. On success: `Content-Type: text/markdown;
+charset=utf-8`, and a safe download filename derived from the document title +
+seal timestamp.
+
+**Error envelope.** Every error response uses a stable shape so the frontend can
+keep failure states calm and consistent:
+
+```json
+{ "error": { "code": "line_commit_failed",
+             "message": "Could not save line. Your text is still in the composer." } }
+```
+
+Messages are reassuring and action-oriented, never raw stack detail.
 
 ### 5.4 Correction flow
 
@@ -303,7 +379,9 @@ submit returns the existing line rather than creating a duplicate.
     WHERE id = ? AND correction_status = 'pending' AND deleted_at IS NULL;
    ```
 
-   Corrections target stable line **IDs**, never `seq` alone. A failure records
+   Corrections target stable line **IDs**, never `seq` alone. When the model
+   returns text identical to `raw_text`, the line is marked
+   `correction_status = 'unchanged'` (not `corrected`). A failure records
    `correction_status = 'failed'` + `correction_error` and can be retried.
 
 Batching + debounce keeps API calls and latency low; language is handled inline,
@@ -351,49 +429,76 @@ content, security and privacy are specified, not assumed:
 - Anthropic's API does not use API inputs/outputs to train models by default;
   this is the basis for sending personal text.
 
-## 7. Acceptance test matrix
+## 7. Design & visual language
 
-These become the acceptance backbone across Phases 1–3:
+The look must serve the "nothing but writing" principle, not decorate it.
+
+- **Spatial contrast hierarchy.** The composer has the highest contrast and a
+  fixed bottom position. Recent committed lines are medium-low contrast; older
+  lines fade further into scrollback. Status and document controls live at the
+  edges and are **never** placed adjacent to the text cursor.
+- **No correction affordances in the line stack.** No badges, diffs, or hover
+  controls on committed lines — those turn capture into editing. Any correction
+  signal is document-level only (the quiet status surface).
+- **Undo is a safety affordance, not a toolbar.** A small, discoverable "Undo
+  last" control in the lower chrome or command menu, revealing its shortcut once
+  discovered — not styled like an editing toolbar.
+- **Motion, sparingly.** If a committed line "drops" upward (the typewriter/chat
+  metaphor), keep it subtle and fast. Correction replacements do **not** animate
+  strongly — motion near text implies the system is editing alongside you.
+- **IME visual stability.** During composition the composer must not flicker,
+  resize, or lose focus, and custom key handling must not interfere with
+  candidate windows. Test with Cantonese, Pinyin, Cangjie, and mobile
+  Traditional Chinese keyboards.
+
+## 8. Acceptance test matrix
+
+These become the acceptance backbone across the build phases:
 
 - Enter **commits** a line when not composing.
 - Enter **does not commit** during IME composition (desktop and mobile).
+- Empty composer + Enter **creates no line**; `Shift+Enter` creates exactly one
+  intentional blank line.
 - Rapid Enter presses **preserve line order** (server `seq` is monotonic).
 - A retried/double-submitted line does **not** duplicate (idempotency).
 - Undo-last works **while a correction is pending**, and a late correction on an
   undone line is a **no-op**.
 - Undo-last **cannot cross a sealed boundary**.
-- Correction **never changes** a line that had no confident error.
+- Correction **never changes** a line that had no confident error, and **skips**
+  blank lines.
 - Restore-raw returns the latest line to exactly what was typed.
-- Seal **preserves language mix and ordering**; re-seal appends history.
-- `GET /export.md` returns the **latest** seal.
+- Seal **preserves language mix and ordering**; re-seal appends history; the
+  seal prompt never summarizes, translates, or invents content.
+- `GET /export.md` returns the **latest** seal, and **`409 no_seal`** when the
+  document has never been sealed.
 - **Every route** rejects unauthorized requests with a uniform `401`.
 
-## 8. Build phasing
+## 9. Build phasing
 
 1. **Phase 1 — Capture core.** Worker + D1 (schema in §5.2) + bearer auth;
-   documents CRUD; line commit with idempotency + server `seq`; undo-last (soft
-   delete); IME-safe SPA canvas with the mobile send fallback; quiet status
-   surface; online-first retry contract; cloud persistence and cross-device
-   sync. No AI yet.
+   documents CRUD with timestamp auto-title; line commit with idempotency +
+   server `seq`; the full keyboard contract (incl. Shift+Enter blank lines);
+   undo-last (soft delete); IME-safe SPA canvas with the mobile send fallback;
+   quiet status + around-canvas states; online-first retry contract; cloud
+   persistence and cross-device sync. No AI yet.
 2. **Phase 2 — Silent correction.** Background Haiku pass with the conditional
    guard, client debounce + reconcile-on-open, correction metadata, restore-raw.
 3. **Phase 3 — Seal & format.** Sonnet format-at-seal within the §4.6
-   boundaries, versioned seals, downloadable `.md`, push to 2nd-brain.
+   boundaries, versioned seals, export HTTP semantics, push to 2nd-brain.
 4. **Later.** Native desktop / mobile wrappers, full offline queue with
    sync-on-reconnect, optional translation help, Notion export, richer
    keyboard-driven document navigation.
 
-Each phase ships the relevant slice of the §7 test matrix as its acceptance
+Each phase ships the relevant slice of the §8 test matrix as its acceptance
 criteria.
 
-## 9. Open questions / to settle during build
+## 10. Open questions / to settle during build
 
-- Exact keyboard bindings (commit, undo-last, restore-raw, new/switch document).
 - Debounce window and batch size for the correction pass.
-- Visual treatment of the quiet status glyph.
+- Visual treatment of the quiet status glyph and the contrast-fade curve.
 - 2nd-brain push: which channel/format a sealed piece should land as.
 
-## 10. Non-goals (for now)
+## 11. Non-goals (for now)
 
 - Not a rich-text editor; no in-place editing of committed lines (beyond
   undo-last and latest-line restore-raw).
