@@ -160,6 +160,39 @@ body {
   cursor: pointer;
 }
 
+/* ---- Token gate (runtime auth, outside the canvas) ---- */
+.token-gate {
+  max-width: 22rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.token-gate form {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.token-input {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  flex: 1;
+}
+
+.token-gate button {
+  margin-top: 0;
+}
+
+.token-hint {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
 /* ---- Writing canvas ---- */
 .writing-canvas {
   display: flex;

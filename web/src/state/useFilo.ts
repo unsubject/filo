@@ -94,6 +94,37 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
 
+  // Per-document store of failed/unacked commits that SURVIVES openDocument
+  // (§5.6). If a commit fails for a document the user has since navigated away
+  // from, the raw text is recorded here instead of being dropped, and is merged
+  // back in (as failed/retryable) when that document is reopened.
+  const failedCommitsRef = useRef<Map<string, CanvasLine[]>>(new Map());
+
+  const recordFailedCommit = useCallback(
+    (docId: string, line: CanvasLine) => {
+      const map = failedCommitsRef.current;
+      const list = map.get(docId) ?? [];
+      const next = list.filter(
+        (l) => l.client_line_id !== line.client_line_id,
+      );
+      next.push({ ...line, _pending: false, _failed: true });
+      map.set(docId, next);
+    },
+    [],
+  );
+
+  const clearFailedCommit = useCallback(
+    (docId: string, clientLineId: string) => {
+      const map = failedCommitsRef.current;
+      const list = map.get(docId);
+      if (!list) return;
+      const next = list.filter((l) => l.client_line_id !== clientLineId);
+      if (next.length > 0) map.set(docId, next);
+      else map.delete(docId);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const up = () => setOnline(true);
@@ -165,7 +196,22 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
         const data: DocumentWithLines = await api.getDocument(id);
         if (activeIdRef.current !== id) return;
         setDocMeta(data.document);
-        setLines(data.lines);
+        // Merge any preserved failed commits for this document back in as
+        // failed/retryable entries (§5.6). Skip (and drop) any that the server
+        // now knows about — e.g. an earlier idempotent retry that did land.
+        const serverClientIds = new Set(
+          data.lines.map((l) => l.client_line_id),
+        );
+        const preserved = (failedCommitsRef.current.get(id) ?? []).filter(
+          (l) => {
+            if (serverClientIds.has(l.client_line_id)) {
+              clearFailedCommit(id, l.client_line_id);
+              return false;
+            }
+            return true;
+          },
+        );
+        setLines([...data.lines, ...preserved]);
         setDocStatus("ready");
         // Reconcile-on-open: heal any lines left pending from a prior session.
         void runCorrection();
@@ -175,7 +221,7 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
         setNotice({ kind: "load_failed" });
       }
     },
-    [api, runCorrection],
+    [api, runCorrection, clearFailedCommit],
   );
 
   const createDocument = useCallback(async () => {
@@ -199,6 +245,7 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
   const deleteDocument = useCallback(
     async (id: string) => {
       await api.deleteDocument(id);
+      failedCommitsRef.current.delete(id);
       setDocuments((prev) => prev.filter((d) => d.id !== id));
       if (activeIdRef.current === id) {
         setActiveId(null);
@@ -272,12 +319,19 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
         setNotice((n) => (n?.kind === "line_commit_failed" ? null : n));
         if (kind === "normal") scheduleCorrection();
       } catch {
+        // Preserve the raw text regardless of whether this document is still in
+        // view (§5.6). If the user has switched away, record it into the per-doc
+        // store so reopening the document surfaces it as failed/retryable.
+        const failedLine: CanvasLine = {
+          ...optimistic,
+          _pending: false,
+          _failed: true,
+        };
+        recordFailedCommit(id, failedLine);
         if (activeIdRef.current !== id) return;
         setLines((prev) =>
           prev.map((l) =>
-            l.client_line_id === clientLineId
-              ? { ...l, _pending: false, _failed: true }
-              : l,
+            l.client_line_id === clientLineId ? failedLine : l,
           ),
         );
         setNotice({ kind: "line_commit_failed" });
@@ -285,7 +339,7 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
         setPendingCommits((n) => Math.max(0, n - 1));
       }
     },
-    [api, nextSeq, scheduleCorrection],
+    [api, nextSeq, scheduleCorrection, recordFailedCommit],
   );
 
   /** Commit driven by Enter / Cmd+Enter / send button. Never while composing. */
@@ -322,12 +376,14 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
           raw_text: line.raw_text,
           client_line_id: line.client_line_id,
         });
+        clearFailedCommit(id, line.client_line_id);
         setLines((prev) =>
           prev.map((l) =>
             l.client_line_id === line.client_line_id ? { ...saved } : l,
           ),
         );
       } catch {
+        recordFailedCommit(id, line);
         setLines((prev) =>
           prev.map((l) =>
             l.client_line_id === line.client_line_id
@@ -340,7 +396,7 @@ export function useFilo(api: FiloApi, options: UseFiloOptions = {}) {
         setPendingCommits((n) => Math.max(0, n - 1));
       }
     }
-  }, [api, lines]);
+  }, [api, lines, clearFailedCommit, recordFailedCommit]);
 
   // ---- Recovery: undo-last & restore-raw ----------------------------------
 

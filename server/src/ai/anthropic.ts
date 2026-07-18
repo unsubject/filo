@@ -39,7 +39,13 @@ const SEAL_SYSTEM = [
 
 interface AnthropicResponse {
   content?: Array<{ type: string; text?: string }>;
+  stop_reason?: string | null;
 }
+
+// Normal, complete terminations. Anything else (notably `max_tokens`) means the
+// model was cut off mid-generation and the content is truncated — we must never
+// store that partial output as a successful correction/seal (spec §5.5/§5.6).
+const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 
 export class AnthropicClient implements AiClient {
   constructor(private readonly apiKey: string) {}
@@ -69,6 +75,15 @@ export class AnthropicClient implements AiClient {
       throw new Error(`anthropic_http_${res.status}`);
     }
     const data = (await res.json()) as AnthropicResponse;
+    // A 200 can still carry truncated content when generation was cut short
+    // (e.g. stop_reason "max_tokens"). Reject it so seal fails cleanly (draft
+    // untouched + retryable) and correction marks the batch failed + retryable,
+    // rather than silently dropping the tail of a long document.
+    const stopReason = data.stop_reason ?? null;
+    if (stopReason !== null && !TERMINAL_STOP_REASONS.has(stopReason)) {
+      // Reason strings are model-controlled but non-sensitive (never the writing).
+      throw new Error(`anthropic_truncated_${stopReason}`);
+    }
     const text = (data.content ?? [])
       .filter((b) => b.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text as string)
@@ -128,7 +143,9 @@ export class AnthropicClient implements AiClient {
       .map((l) => (l.is_blank ? '' : l.text))
       .join('\n');
     const userText = `Title: ${meta.title}\n\nRaw lines:\n${rendered}`;
-    return this.call(SEAL_MODEL, SEAL_SYSTEM, userText, 4096);
+    // Generous budget to reduce truncation on long documents; the stop_reason
+    // guard in `call` still rejects any response that is cut off regardless.
+    return this.call(SEAL_MODEL, SEAL_SYSTEM, userText, 16384);
   }
 }
 

@@ -1,9 +1,14 @@
-import { useEffect, useMemo } from "react";
-import { createApiClient, type FiloApi } from "./api/client";
+import { useEffect, useMemo, useState } from "react";
+import {
+  createApiClient,
+  hasAuthToken,
+  type FiloApi,
+} from "./api/client";
 import { useFilo } from "./state/useFilo";
 import { DocumentSwitcher } from "./components/DocumentSwitcher";
 import { StatusSurface } from "./components/StatusSurface";
 import { WritingCanvas } from "./components/WritingCanvas";
+import { TokenGate } from "./components/TokenGate";
 import type { CanvasNotice } from "./state/useFilo";
 
 export interface AppProps {
@@ -11,16 +16,29 @@ export interface AppProps {
   api?: FiloApi;
   /** Override the correction debounce (tests use 0). */
   correctionDebounceMs?: number;
+  /**
+   * Force-bypass the runtime token gate (tests inject a fake API and don't need
+   * a token). Defaults to whether a token is present in localStorage.
+   */
+  requireToken?: boolean;
 }
 
-export default function App({ api, correctionDebounceMs }: AppProps) {
+export default function App({
+  api,
+  correctionDebounceMs,
+  requireToken = api === undefined,
+}: AppProps) {
   const client = useMemo(() => api ?? createApiClient(), [api]);
   const store = useFilo(client, { correctionDebounceMs });
 
+  // Runtime-only auth: gate the app until a token is stored in localStorage.
+  const [authed, setAuthed] = useState(() => !requireToken || hasAuthToken());
+
   const { refreshDocuments } = store;
   useEffect(() => {
+    if (!authed) return;
     void refreshDocuments();
-  }, [refreshDocuments]);
+  }, [refreshDocuments, authed]);
 
   function handleRetry(notice: CanvasNotice) {
     switch (notice.kind) {
@@ -45,6 +63,16 @@ export default function App({ api, correctionDebounceMs }: AppProps) {
   }
 
   const hasActiveDoc = !!store.activeId && !!store.docMeta;
+
+  if (!authed) {
+    return (
+      <div className="app">
+        <main className="app-main">
+          <TokenGate onSaved={() => setAuthed(true)} />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app">

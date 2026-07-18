@@ -3,9 +3,15 @@
 // Configuration:
 //   - Base URL comes from `import.meta.env.VITE_API_BASE`
 //     (default `http://localhost:8787`).
-//   - The single-user bearer token comes from `import.meta.env.VITE_FILO_TOKEN`
-//     or, if unset, `localStorage.getItem("filo_token")`.
-//     See web/README.md for how to set either one.
+//   - The single-user bearer token is **runtime-only**: it lives in
+//     `localStorage["filo_token"]` and is read per request via `getAuthToken`.
+//     It is NEVER inlined into the production bundle — a build-time secret in
+//     the static Pages app would be recoverable by anyone who can load the app
+//     (spec §6). Use the token gate in the UI, or `setAuthToken`, to store it.
+//   - `VITE_FILO_TOKEN` is a **local-dev convenience only**: in `npm run dev`
+//     it seeds localStorage once (see `seedDevToken`). The read is guarded by
+//     `import.meta.env.DEV`, so the literal is dead-code-eliminated from
+//     production builds and prod behavior never depends on it.
 //
 // Every route requires the bearer token. Errors surface as `ApiError` carrying
 // the stable `{ error: { code, message } }` envelope so the UI can keep failure
@@ -23,7 +29,7 @@ import type {
 } from "./types";
 
 export const DEFAULT_API_BASE = "http://localhost:8787";
-const TOKEN_STORAGE_KEY = "filo_token";
+export const TOKEN_STORAGE_KEY = "filo_token";
 
 /** A structured error carrying the API's stable error envelope. */
 export class ApiError extends Error {
@@ -67,9 +73,7 @@ export interface ApiClientConfig {
   fetchImpl?: typeof fetch;
 }
 
-export function resolveEnvToken(): string | null {
-  const fromEnv = import.meta.env?.VITE_FILO_TOKEN;
-  if (fromEnv) return fromEnv;
+function readStoredToken(): string | null {
   try {
     return globalThis.localStorage?.getItem(TOKEN_STORAGE_KEY) ?? null;
   } catch {
@@ -77,11 +81,54 @@ export function resolveEnvToken(): string | null {
   }
 }
 
-export function storeToken(token: string): void {
+/**
+ * The current bearer token, read from localStorage at call time (runtime-only).
+ * Resolved per request so a late login takes effect without a reload.
+ */
+export function getAuthToken(): string | null {
+  return readStoredToken();
+}
+
+/** Whether a bearer token has been provided this session. */
+export function hasAuthToken(): boolean {
+  return !!readStoredToken();
+}
+
+/** Store the bearer token at runtime (used by the token gate UI). */
+export function setAuthToken(token: string): void {
+  const value = token.trim();
   try {
-    globalThis.localStorage?.setItem(TOKEN_STORAGE_KEY, token);
+    if (value) globalThis.localStorage?.setItem(TOKEN_STORAGE_KEY, value);
+    else globalThis.localStorage?.removeItem(TOKEN_STORAGE_KEY);
   } catch {
-    /* ignore — non-persistent contexts still work via env */
+    /* ignore — non-persistent contexts simply won't remember the token */
+  }
+}
+
+/** Clear the stored bearer token (e.g. a "sign out" affordance). */
+export function clearAuthToken(): void {
+  try {
+    globalThis.localStorage?.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * DEV-ONLY: seed localStorage from `VITE_FILO_TOKEN` so `npm run dev` works
+ * without pasting a token every session. Guarded by `import.meta.env.DEV`, so
+ * the secret literal is dead-code-eliminated from production bundles — prod
+ * NEVER depends on a build-time token. No-op if a token is already stored.
+ */
+export function seedDevToken(): void {
+  if (!import.meta.env?.DEV) return;
+  const fromEnv = import.meta.env?.VITE_FILO_TOKEN;
+  if (!fromEnv) return;
+  if (readStoredToken()) return;
+  try {
+    globalThis.localStorage?.setItem(TOKEN_STORAGE_KEY, fromEnv);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -105,7 +152,7 @@ export function createApiClient(config: ApiClientConfig = {}): FiloApi {
     import.meta.env?.VITE_API_BASE ??
     DEFAULT_API_BASE
   ).replace(/\/+$/, "");
-  const getToken = config.getToken ?? resolveEnvToken;
+  const getToken = config.getToken ?? getAuthToken;
   const doFetch = config.fetchImpl ?? globalThis.fetch.bind(globalThis);
 
   function authHeaders(extra?: Record<string, string>): HeadersInit {

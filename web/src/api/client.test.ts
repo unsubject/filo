@@ -1,5 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
-import { createApiClient, ApiError, type FiloApi } from "./client";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  createApiClient,
+  ApiError,
+  setAuthToken,
+  getAuthToken,
+  hasAuthToken,
+  clearAuthToken,
+  TOKEN_STORAGE_KEY,
+  type FiloApi,
+} from "./client";
 import type { DocumentMeta, Line } from "./types";
 
 /**
@@ -54,6 +63,10 @@ const lineRow = (id: string): Line => ({
 });
 
 describe("createApiClient wire contract (§5.3 envelopes)", () => {
+  beforeEach(() => {
+    clearAuthToken();
+  });
+
   it("listDocuments unwraps { documents } to the array", async () => {
     const docs = [docMeta("d1"), docMeta("d2")];
     const { api, fetchMock } = clientReturning(jsonResponse({ documents: docs }));
@@ -208,6 +221,55 @@ describe("createApiClient wire contract (§5.3 envelopes)", () => {
       status: 409,
     });
     await expect(api.exportMarkdown("d1")).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("uses the runtime token from localStorage (setAuthToken), not a bundled env value", async () => {
+    // No getToken override: the client must fall back to the runtime accessor,
+    // which reads localStorage per request. Prod correctness must not depend on
+    // VITE_FILO_TOKEN (which is undefined in this test run).
+    expect(import.meta.env.VITE_FILO_TOKEN).toBeUndefined();
+    expect(hasAuthToken()).toBe(false);
+
+    setAuthToken("runtime-secret");
+    expect(getAuthToken()).toBe("runtime-secret");
+    expect(localStorage.getItem(TOKEN_STORAGE_KEY)).toBe("runtime-secret");
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ documents: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const api = createApiClient({
+      baseUrl: BASE,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await api.listDocuments();
+    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer runtime-secret");
+  });
+
+  it("reads the token per request, so a late setAuthToken takes effect", async () => {
+    // Fresh Response per call — a Response body can only be read once.
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      jsonResponse({ documents: [] }),
+    );
+    const api = createApiClient({
+      baseUrl: BASE,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    // No token yet: no Authorization header sent.
+    await api.listDocuments();
+    let headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+
+    // Log in late — the next request must carry it without rebuilding the client.
+    setAuthToken("late-login");
+    await api.listDocuments();
+    headers = fetchMock.mock.calls[1][1].headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer late-login");
   });
 
   it("surfaces the error envelope { error: { code, message } } as ApiError", async () => {

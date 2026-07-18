@@ -16,20 +16,33 @@ npm run build      # tsc -b && vite build
 
 ## Configuration
 
-The API client reads two environment variables at build/dev time via Vite:
+| Variable         | Purpose                          | Default                 |
+| ---------------- | -------------------------------- | ----------------------- |
+| `VITE_API_BASE`  | Base URL of the filo Worker API  | `http://localhost:8787` |
+| `VITE_FILO_TOKEN`| **Local-dev only** bearer token  | _(unset)_               |
 
-| Variable         | Purpose                              | Default                 |
-| ---------------- | ------------------------------------ | ----------------------- |
-| `VITE_API_BASE`  | Base URL of the filo Worker API      | `http://localhost:8787` |
-| `VITE_FILO_TOKEN`| Single-user bearer token (all routes)| _(unset)_               |
+Copy `.env.example` to `.env.local` for local dev.
 
-Copy `.env.example` to `.env.local` and fill these in for local dev. The token
-is optional in the file — if `VITE_FILO_TOKEN` is unset, the client falls back
-to `localStorage.getItem("filo_token")`, so you can also set it at runtime:
+### The bearer token is runtime-only
 
-```js
-localStorage.setItem("filo_token", "<your-token>");
-```
+The single-user bearer token is resolved at request time from
+`localStorage["filo_token"]` — never from the bundle. This matters:
+`VITE_FILO_TOKEN` is a Vite build-time variable, so putting the real token there
+**inlines it into the static JS** shipped to Cloudflare Pages, where anyone who
+can load the app could recover it and call every API route (spec §6). So:
+
+- **Production:** set the token at runtime. On first load the app shows a small
+  token gate (outside the writing canvas); the value is stored in
+  `localStorage["filo_token"]` on your device only. You can also set it manually:
+
+  ```js
+  localStorage.setItem("filo_token", "<your-token>");
+  ```
+
+- **Local dev:** `VITE_FILO_TOKEN` is a convenience that only **seeds**
+  localStorage during `npm run dev` (via `seedDevToken`, guarded by
+  `import.meta.env.DEV`, so the literal is dead-code-eliminated from production
+  builds). Never rely on it for a real deployment; leave it blank for prod.
 
 Never commit a real token; `.env` / `.env.*` are gitignored.
 

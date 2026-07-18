@@ -60,7 +60,7 @@ cd web && npm run dev
 
 ```bash
 npm run typecheck   # server + web
-npm test            # server (28) + web (19)
+npm test            # server (32) + web (22)
 npm run build       # server (wrangler dry-run) + web (vite build)
 ```
 
@@ -83,10 +83,13 @@ few secrets only you can set:
    ```
 5. **Deploy the Worker:** `npx wrangler deploy`
 6. **Deploy the SPA** (Cloudflare Pages): build `web/` (`npm run build` → `web/dist`)
-   and deploy it; set `VITE_API_BASE` to the deployed Worker URL and provide the
-   bearer token (via `VITE_FILO_TOKEN` at build time or `localStorage.filo_token`
-   at runtime). Pin `CORS_ORIGIN` in `wrangler.toml` to the Pages origin if you
-   don't want `*`.
+   and deploy it; set `VITE_API_BASE` to the deployed Worker URL. Provide the
+   bearer token at **runtime** — the app's token gate stores it in
+   `localStorage["filo_token"]` on first load. Do **not** set `VITE_FILO_TOKEN`
+   for a production build: it inlines the secret into the static bundle, where
+   anyone loading the app could recover it (spec §6). `VITE_FILO_TOKEN` is a
+   local-dev convenience only. Pin `CORS_ORIGIN` in `wrangler.toml` to the Pages
+   origin if you don't want `*`.
 7. **Verify model IDs** are current on your account before production traffic:
    correction `claude-haiku-4-5-20251001`, seal `claude-sonnet-5`.
 
