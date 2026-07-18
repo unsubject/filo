@@ -2,6 +2,11 @@
 
 > A distraction-free, typewriter-style capture tool for writing line by line.
 
+*Revision 2 — hardened after the spec review (`PRODUCT_SPEC_REVIEW.md`, PR #1).
+The core vision is unchanged; this revision adds lifecycle, sync, mobile/IME,
+security/privacy, and acceptance-test detail so the build can proceed with
+testable guards.*
+
 ## 1. Vision
 
 Simon writes best when he can focus on one line at a time without distraction —
@@ -46,14 +51,16 @@ mixed freely within the same document.
 |---|---|
 | Platform | Web app (SPA), single-user, cloud sync across devices |
 | Writing model | Chat-composer: type → **Enter** → line commits into the doc above; composer clears |
-| Editing | Committed lines are **not editable** in `filo`; only action is *delete most recent line(s)* — a repeatable undo-last |
+| Editing | Committed lines are **not editable** in `filo`; recovery is *delete most recent line(s)* (repeatable undo-last) plus *restore-raw* for the latest line |
 | Auto-correct | Silent, background, **high-confidence spelling/grammar only** — never rephrase or restructure |
 | Correction timing | Line commits instantly as typed; the correction lands a moment later, in place |
+| Correction trigger | Client debounce **+ reconcile-on-open**; best-effort while the app is open (no queue infra in v1) |
 | Bilingual | Mix English + 繁中 freely within one document; language auto-detected per line |
 | Documents | Discrete named documents (a document list; create / open) |
-| Seal / format | On-demand **seal** action turns raw lines into clean formatted markdown |
+| Seal / format | On-demand **seal** action turns raw lines into clean formatted markdown; re-seal allowed (versioned) |
 | Seal output | Stored in `filo` + downloadable `.md` **and** pushable to 2nd-brain |
-| Auth | Single-user bearer token |
+| Delete strategy | **Soft delete** (`deleted_at` tombstone); seal/export ignore deleted lines |
+| Auth | Single-user bearer token (stored as a Cloudflare secret) |
 | Stack | Cloudflare Worker API + **D1** (SQLite) + Claude API; SPA on Cloudflare Pages |
 | Models | **Haiku** for the silent correction pass (fast, cheap); **Sonnet** for seal-time formatting |
 
@@ -73,6 +80,13 @@ A full-screen, distraction-free surface:
   or rewrites while you type.
 - No visible word count, no formatting toolbar, no AI suggestions in view.
 
+**Quiet status surface.** Cloud sync and background AI introduce invisible
+failure modes, so there is exactly **one** unobtrusive status affordance (a
+small bottom-corner glyph or a row in the document menu) with states:
+`Saved · Syncing · Offline · Correction pending · Seal failed`. The rule:
+status is there **if you look for it**, but it never competes with the composer
+and never interrupts.
+
 ### 4.2 IME safety (make-or-break for Traditional Chinese)
 
 Chinese input relies on an IME composition session: you type romanization/phonetics
@@ -87,13 +101,33 @@ and press keys — including **Enter** — to *select candidate characters*. `fi
 This is the single most important interaction detail in the product. If it is
 wrong, the tool is unusable for half its purpose.
 
+**Mobile / soft-keyboard contract.** The web app will be opened on phones, and
+the whole interaction hinges on Enter — which mobile keyboards handle
+inconsistently. Even before native wrappers, v1 must:
+
+- Keep the composer usable with the virtual keyboard up; respect iOS safe-area
+  insets so the composer isn't hidden.
+- Provide a **visible commit/send affordance** (a send button) as a reliable
+  fallback for keyboards without a dependable Enter key.
+- Apply the same composition rule to mobile Chinese IMEs (Enter during
+  composition never commits).
+
+Deep mobile polish is deferred, but the Enter-dependency fallback ships in v1.
+
 ### 4.3 Mistake recovery
 
-There is no in-place editing of committed lines. The only recovery action is
-**delete the most recent line(s)** — an undo-last that can be repeated to pull
-back several recent lines. Everything older is considered sealed for the
-downstream editor. (Suggested bindings: a visible undo affordance plus a
-keyboard shortcut such as `Cmd/Ctrl+Backspace`; exact binding TBD in build.)
+There is no in-place editing of committed lines. Two non-interruptive recovery
+actions exist:
+
+- **Undo-last** — delete the most recent line, repeatable to pull back several
+  recent lines. See §4.7 for the precise contract.
+- **Restore-raw (latest line only)** — if a silent correction changed the most
+  recent line for the worse, one action reverts that line to exactly what you
+  typed (`raw_text`). Scoped to the latest line only, to preserve the
+  capture-not-edit model. Anything older is fixed downstream after export.
+
+Suggested bindings: a visible undo affordance plus a shortcut such as
+`Cmd/Ctrl+Backspace`; exact binding settled in build.
 
 ### 4.4 Documents
 
@@ -101,26 +135,55 @@ Writing is organized into **discrete, named documents**. A minimal document list
 lets you create a new document or open an existing one. The writing canvas stays
 uncluttered; document management lives behind a light, out-of-the-way menu.
 
+**First-run empty state.** Because the interaction model is unfamiliar, a new
+document shows one dismissible line before the first commit — *"Write one line,
+press Enter, keep going."* — then disappears.
+
 ### 4.5 Silent correction
 
 - A line commits **instantly** and is persisted exactly as typed (`raw_text`).
 - A moment later, a background pass corrects **only medium-to-high-confidence
   spelling and grammar errors** and updates the line **in place**, silently.
-- No diff, no "accept/reject", no marker that interrupts. (An optional, purely
-  passive indicator of correction state is allowed but must never demand
-  attention.)
+- No diff, no "accept/reject", no marker that interrupts. The only visible hint
+  is the passive `Correction pending` status in §4.1.
 - Mixed English / 繁中 is handled per line with language detected inline.
+- Correction is **best-effort while the app is open**: triggered on a debounce
+  and reconciled when a document is next opened (see §5.4). If a correction is
+  wrong on the latest line, use restore-raw (§4.3).
 
 ### 4.6 Seal & format
 
 When a document is ready, the user **seals** it. This is the one moment `filo`
-does heavier AI work:
+does heavier AI work.
 
-- The raw (corrected) lines are formatted into clean, structured markdown —
-  headings, paragraphs, sensible structure — without changing the words'
-  meaning or voice.
+- The raw (corrected) lines are formatted into clean, structured markdown
+  without changing the words' meaning or voice.
+- **Formatting boundaries** (also drive the prompt and tests):
+  - *Allowed:* headings, paragraphs, bullet lists, and blockquotes where clearly
+    implied by the raw lines.
+  - *Not allowed:* adding new claims, reordering (unless explicitly asked),
+    summarizing, translating, or changing register/voice.
+  - Ambiguous fragments stay fragments — do not over-polish.
+- **Lifecycle:** sealing creates a **version** (a row in `seals`); the draft may
+  keep going afterward. **Re-sealing is allowed** and appends to seal history.
+  Export uses the **latest** seal by default. If a seal fails, the draft is
+  untouched and the `Seal failed` status offers a retry.
 - The sealed result is **stored in `filo`**, **downloadable as an `.md` file**,
   and can be **pushed to Simon's 2nd-brain** journal.
+
+### 4.7 Undo-last contract
+
+Undo-last is the primary recovery mechanism, so its behavior is defined
+precisely:
+
+- Removes the most recent **non-deleted** line, even if it has **already been
+  corrected**.
+- **Cannot cross a sealed boundary** — undo only affects lines added since the
+  last seal.
+- Optimistic locally (the line disappears immediately), then confirmed on sync.
+- If a background correction completes for a line that was just undone, the
+  correction write is a **no-op** (see the conditional guard in §5.4). Delete is
+  a soft tombstone, so a late correction can never resurrect a removed line.
 
 ## 5. Architecture
 
@@ -141,95 +204,201 @@ does heavier AI work:
 
 ```sql
 documents(
-  id, title, created_at, updated_at, sealed_at, status        -- status: draft | sealed
-)
+  id            TEXT PRIMARY KEY,
+  title         TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'draft'
+                  CHECK (status IN ('draft', 'sealed')),
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  sealed_at     INTEGER            -- last successful seal, null if never sealed
+);
 
 lines(
-  id, document_id, seq,
-  raw_text,            -- exactly as typed, kept for provenance
-  corrected_text,      -- what is displayed after the silent pass (null until corrected)
-  corrected_at,
-  created_at
-)
+  id                       TEXT PRIMARY KEY,
+  document_id              TEXT NOT NULL REFERENCES documents(id),
+  client_line_id           TEXT,           -- client-generated, for idempotency
+  seq                      INTEGER NOT NULL,-- server-assigned, monotonic per doc
+  raw_text                 TEXT NOT NULL,  -- exactly as typed; never overwritten
+  corrected_text           TEXT,           -- silent fix; null until corrected
+  correction_status        TEXT NOT NULL DEFAULT 'pending'
+                             CHECK (correction_status IN
+                               ('pending','corrected','failed','skipped')),
+  correction_model         TEXT,
+  correction_prompt_version TEXT,
+  correction_error         TEXT,
+  corrected_at             INTEGER,
+  deleted_at               INTEGER,        -- soft-delete tombstone
+  created_at               INTEGER NOT NULL,
+  UNIQUE (document_id, seq),
+  UNIQUE (document_id, client_line_id)
+);
 
 seals(
-  id, document_id, formatted_markdown, model, created_at       -- history of sealed outputs
-)
+  id                TEXT PRIMARY KEY,
+  document_id       TEXT NOT NULL REFERENCES documents(id),
+  formatted_markdown TEXT NOT NULL,
+  model             TEXT NOT NULL,
+  prompt_version    TEXT,
+  created_at        INTEGER NOT NULL        -- newest row = current export
+);
+
+-- Indexes
+CREATE INDEX idx_lines_doc_seq       ON lines(document_id, seq);
+CREATE INDEX idx_lines_doc_pending   ON lines(document_id, correction_status);
+CREATE INDEX idx_seals_doc_created   ON seals(document_id, created_at);
 ```
 
-`raw_text` is never overwritten; `corrected_text` holds the silent fix and is
-what renders. Keeping both preserves provenance and makes correction reversible.
+`raw_text` is never overwritten. `corrected_text` holds the silent fix and is
+what renders when present; otherwise `raw_text` renders. Keeping both preserves
+provenance and makes restore-raw and downstream cleanup trivial. `seq` is
+assigned by the server inside a transaction so ordering is authoritative even
+under concurrent/retried writes.
 
 ### 5.3 API surface
+
+All routes require the bearer token.
 
 | Method & path | Purpose |
 |---|---|
 | `GET /documents` | List documents |
 | `POST /documents` | Create a document |
-| `GET /documents/:id` | Fetch a document with its lines |
+| `GET /documents/:id` | Fetch a document with its (non-deleted) lines |
 | `PATCH /documents/:id` | Rename / update metadata |
-| `DELETE /documents/:id` | Delete a document |
-| `POST /documents/:id/lines` | Commit a line `{raw_text}` → returns the (uncorrected) line |
-| `DELETE /documents/:id/lines/last` | Undo the most recent commit |
-| `POST /documents/:id/correct` | Batch-correct pending lines (Haiku), silent in-place update |
-| `POST /documents/:id/seal` | Format via Sonnet, store the seal, return markdown; optional 2nd-brain push |
-| `GET /documents/:id/export.md` | Download the sealed markdown |
+| `DELETE /documents/:id` | Delete a document (and its seals) |
+| `POST /documents/:id/lines` | Commit a line `{raw_text, client_line_id}` → returns the line with server `seq`; idempotent on `client_line_id` |
+| `DELETE /documents/:id/lines/last` | Undo the most recent line (soft delete) |
+| `POST /documents/:id/lines/:lineId/restore-raw` | Restore the latest line to `raw_text` (clears the correction) |
+| `POST /documents/:id/correct` | Correct all still-pending, non-deleted lines (Haiku), silent in-place update |
+| `POST /documents/:id/seal` | Format via Sonnet, append a `seals` row, return markdown; optional 2nd-brain push |
+| `GET /documents/:id/export.md` | Download the latest sealed markdown |
 
-All routes require the bearer token.
+**Idempotency & ordering.** `POST /lines` carries a client-generated
+`client_line_id`; the server assigns `seq` in a D1 transaction and enforces
+`UNIQUE (document_id, seq)` and `UNIQUE (document_id, client_line_id)`. A retried
+submit returns the existing line rather than creating a duplicate.
 
 ### 5.4 Correction flow
 
-1. Client commits a line → `POST /lines` persists `raw_text` and it appears
-   immediately.
-2. After a short debounce of inactivity, the client calls `POST /correct`,
-   which batches any lines still lacking `corrected_text`.
-3. The Worker sends the batch to **Haiku** with a strict instruction:
+1. Client commits a line → `POST /lines` persists `raw_text`
+   (`correction_status = 'pending'`) and it appears immediately.
+2. After a short debounce of inactivity, the client calls `POST /correct`, which
+   batches all still-`pending`, non-deleted lines.
+3. On **opening a document**, the client also calls `POST /correct` once to
+   **reconcile** any lines left pending from a previous session (e.g. the tab
+   was closed before the debounce fired). Correction is therefore best-effort
+   while open and self-healing on next open — no queue infrastructure in v1.
+4. The Worker sends the batch to **Haiku** with a strict instruction:
 
    > Fix only medium-to-high-confidence spelling and grammar errors. Do **not**
    > rephrase, restructure, or change meaning, tone, or style. Preserve mixed
    > English and Traditional Chinese exactly. If there is no confident fix,
    > return the line unchanged.
 
-4. Corrected text is written to `corrected_text` and quietly replaces the
-   displayed line.
+5. Corrected text is written with a **conditional guard** so it can never touch
+   a line that was undone or already resolved:
+
+   ```sql
+   UPDATE lines
+      SET corrected_text = ?, correction_status = 'corrected', corrected_at = ?
+    WHERE id = ? AND correction_status = 'pending' AND deleted_at IS NULL;
+   ```
+
+   Corrections target stable line **IDs**, never `seq` alone. A failure records
+   `correction_status = 'failed'` + `correction_error` and can be retried.
 
 Batching + debounce keeps API calls and latency low; language is handled inline,
 so no separate language detector is needed.
 
 ### 5.5 Seal flow
 
-1. `POST /seal` gathers the document's lines (corrected where available).
-2. **Sonnet** formats them into clean structured markdown, preserving wording
-   and voice.
-3. The result is stored in `seals`, returned to the client, made available at
-   `GET /export.md`, and — if requested — pushed to 2nd-brain via its API/MCP.
+1. `POST /seal` gathers the document's **non-deleted** lines in `seq` order
+   (corrected text where present, else raw).
+2. **Sonnet** formats them into clean structured markdown within the boundaries
+   in §4.6, preserving wording and voice.
+3. A new row is appended to `seals`; the result is returned to the client, made
+   available at `GET /export.md` (latest seal), and — if requested — pushed to
+   2nd-brain via its API/MCP. On failure the draft is untouched and the client
+   surfaces `Seal failed` with a retry.
 
-## 6. Build phasing
+### 5.6 Online-first & retry contract
 
-1. **Phase 1 — Capture core.** Worker + D1 + bearer auth; documents CRUD; line
-   commit + undo-last; IME-safe SPA canvas; cloud persistence and cross-device
-   sync. No AI yet — pure, reliable capture that syncs.
-2. **Phase 2 — Silent correction.** Background Haiku pass, silent in-place
-   update, `raw`/`corrected` provenance.
-3. **Phase 3 — Seal & format.** Sonnet format-at-seal, stored + downloadable
-   `.md`, push to 2nd-brain.
-4. **Later.** Desktop / mobile wrappers, offline queue with sync-on-reconnect,
-   optional translation help, Notion export, richer keyboard-driven document
-   navigation.
+v1 is online-first (server is source of truth), but a minimal contract prevents
+data loss without a full offline queue:
 
-## 7. Open questions / to settle during build
+- Lines display optimistically the instant Enter is pressed.
+- The composer's text is retained until the server acknowledges the commit; on
+  failure the line is marked unsynced and retried, and nothing is lost.
+- Failed seals and failed corrections are retryable from the quiet status
+  surface.
+- A full offline queue with sync-on-reconnect remains a *Later* item.
 
-- Exact keyboard bindings (commit, undo-last, new document, switch document).
+## 6. Security & privacy
+
+Because `filo` sends personal writing to an AI API and holds journal-grade
+content, security and privacy are specified, not assumed:
+
+- **Auth:** the bearer token is stored as a **Cloudflare secret**, never in
+  source or the client bundle. Compare tokens in a **timing-safe** way. Every
+  route returns a uniform `401` that does not leak whether a route/resource
+  exists.
+- **Logging:** never log bearer tokens, and never log AI request/response
+  payloads (they contain private writing).
+- **Data sent to AI:** correction sends individual pending lines; seal sends the
+  document's non-deleted lines. Nothing else is transmitted.
+- **Retention & deletion:** `raw_text`, `corrected_text`, and `seals` persist
+  until the user deletes the document; `DELETE /documents/:id` removes the
+  document, its lines, and its seals. AI request/response logs are not stored.
+- Anthropic's API does not use API inputs/outputs to train models by default;
+  this is the basis for sending personal text.
+
+## 7. Acceptance test matrix
+
+These become the acceptance backbone across Phases 1–3:
+
+- Enter **commits** a line when not composing.
+- Enter **does not commit** during IME composition (desktop and mobile).
+- Rapid Enter presses **preserve line order** (server `seq` is monotonic).
+- A retried/double-submitted line does **not** duplicate (idempotency).
+- Undo-last works **while a correction is pending**, and a late correction on an
+  undone line is a **no-op**.
+- Undo-last **cannot cross a sealed boundary**.
+- Correction **never changes** a line that had no confident error.
+- Restore-raw returns the latest line to exactly what was typed.
+- Seal **preserves language mix and ordering**; re-seal appends history.
+- `GET /export.md` returns the **latest** seal.
+- **Every route** rejects unauthorized requests with a uniform `401`.
+
+## 8. Build phasing
+
+1. **Phase 1 — Capture core.** Worker + D1 (schema in §5.2) + bearer auth;
+   documents CRUD; line commit with idempotency + server `seq`; undo-last (soft
+   delete); IME-safe SPA canvas with the mobile send fallback; quiet status
+   surface; online-first retry contract; cloud persistence and cross-device
+   sync. No AI yet.
+2. **Phase 2 — Silent correction.** Background Haiku pass with the conditional
+   guard, client debounce + reconcile-on-open, correction metadata, restore-raw.
+3. **Phase 3 — Seal & format.** Sonnet format-at-seal within the §4.6
+   boundaries, versioned seals, downloadable `.md`, push to 2nd-brain.
+4. **Later.** Native desktop / mobile wrappers, full offline queue with
+   sync-on-reconnect, optional translation help, Notion export, richer
+   keyboard-driven document navigation.
+
+Each phase ships the relevant slice of the §7 test matrix as its acceptance
+criteria.
+
+## 9. Open questions / to settle during build
+
+- Exact keyboard bindings (commit, undo-last, restore-raw, new/switch document).
 - Debounce window and batch size for the correction pass.
-- Whether to show any passive "corrected / syncing" indicator, or truly nothing.
-- Offline behavior for v1 (server-of-truth only vs. a local queue) — currently
-  deferred to *Later*.
+- Visual treatment of the quiet status glyph.
 - 2nd-brain push: which channel/format a sealed piece should land as.
 
-## 8. Non-goals (for now)
+## 10. Non-goals (for now)
 
-- Not a rich-text editor; no in-place editing of committed lines.
+- Not a rich-text editor; no in-place editing of committed lines (beyond
+  undo-last and latest-line restore-raw).
 - No collaborative / multi-user features — single-user only.
 - No interruptive AI: no inline suggestions, autocomplete, or accept/reject
   prompts during writing.
 - No translation between languages during capture (may come *Later*).
+- No full offline queue in v1 (online-first contract only).
