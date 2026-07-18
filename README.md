@@ -81,15 +81,23 @@ few secrets only you can set:
    npx wrangler secret put SECOND_BRAIN_URL
    npx wrangler secret put SECOND_BRAIN_TOKEN
    ```
-5. **Deploy the Worker:** `npx wrangler deploy`
-6. **Deploy the SPA** (Cloudflare Pages): build `web/` (`npm run build` → `web/dist`)
-   and deploy it; set `VITE_API_BASE` to the deployed Worker URL. Provide the
-   bearer token at **runtime** — the app's token gate stores it in
+5. **Build the SPA, then deploy the Worker** — a **single** Worker serves both
+   the API and the static SPA (same origin, no CORS). The Worker's `[assets]`
+   binding (`server/wrangler.toml`) bundles `web/dist`, so build the web app
+   first:
+   ```bash
+   npm --prefix web ci && npm --prefix web run build   # produces web/dist
+   cd server && npx wrangler deploy                     # bundles worker + assets
+   ```
+   With Cloudflare **Workers Builds** (git-connected), use root `server`, build
+   command `npm --prefix ../web ci && npm --prefix ../web run build`, and deploy
+   command `npx wrangler deploy`. Point your custom domain (e.g.
+   `filo.unsubject.com`) at this one Worker.
+6. **Token at runtime:** the app's token gate stores the bearer token in
    `localStorage["filo_token"]` on first load. Do **not** set `VITE_FILO_TOKEN`
-   for a production build: it inlines the secret into the static bundle, where
-   anyone loading the app could recover it (spec §6). `VITE_FILO_TOKEN` is a
-   local-dev convenience only. Pin `CORS_ORIGIN` in `wrangler.toml` to the Pages
-   origin if you don't want `*`.
+   for a production build (it would inline the secret into the bundle, spec §6);
+   it's a local-dev convenience only. `VITE_API_BASE` is left **empty** in
+   `web/.env.production` so the SPA calls the API same-origin.
 7. **Verify model IDs** are current on your account before production traffic:
    correction `claude-haiku-4-5-20251001`, seal `claude-sonnet-5`.
 

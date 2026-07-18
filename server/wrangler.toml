@@ -3,6 +3,16 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Serve the built SPA (web/dist) as static assets from THIS same Worker, so the
+# app and the API share one origin (filo.unsubject.com) — no CORS, no second
+# Worker. API paths run the Worker first; every other path serves a static file,
+# falling back to index.html for client-side routes (SPA). The web build must
+# run before deploy so ../web/dist exists (see the build command in the README).
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/documents", "/documents/*"]
+
 # D1 binding. Fill in database_id after `wrangler d1 create filo`.
 [[d1_databases]]
 binding = "DB"
